@@ -5,7 +5,14 @@ import { MatchService } from '../domains/matches/match.service'
 import { TeamService } from '../domains/teams/team.service'
 import { PlayerRepository } from '../domains/players/player.repository'
 import { getSettings } from '../domains/settings/settings.routes'
-import { RoundData } from '../domains/matches/match.types'
+import { Match, RoundData } from '../domains/matches/match.types'
+import {
+  currentVetoReverseSide,
+  desiredReverseSideFromPlayers,
+  desiredReverseSideFromVeto,
+  setVetoReverseSide,
+  stripMapName
+} from './sideLogic'
 
 const matchService = new MatchService()
 const teamService = new TeamService()
@@ -92,15 +99,94 @@ export const setSpectatorSlots = (slots: Record<number, string>): void => {
   }
 }
 
+const applyReverseSide = async (io: Server, match: Match, mapName: string, reverseSide: boolean) => {
+  if (!match.vetos?.some((v) => v.mapName === mapName)) return false
+  if (currentVetoReverseSide(match, mapName) === reverseSide) return false
+  await matchService.updateMatch(match.id, { vetos: setVetoReverseSide(match, mapName, reverseSide) })
+  await syncGSITeams()
+  io.emit('match')
+  return true
+}
+
+const getCurrentMatchOrNull = async (): Promise<Match | null> => {
+  try {
+    return await matchService.getCurrentMatch()
+  } catch {
+    return null
+  }
+}
+
 export const setupGSI = (io: Server) => {
   const router = Router()
 
+  let lastSeenMapName: string | null = null
+  let lastRosterCheckAt = 0
+  const ROSTER_CHECK_MS = 2500
+
   // Sync teams whenever the map changes (reverseSide may differ per map)
-  GSI.on('data', (data) => {
-    const prevMap = GSI.last?.map?.name
-    const nextMap = data.map?.name
-    if (nextMap && nextMap !== prevMap) {
-      syncGSITeams()
+  GSI.on('data', async (data) => {
+    try {
+      const nextMap = data.map?.name as string | undefined
+      const mapChanged = !!nextMap && nextMap !== lastSeenMapName
+      if (mapChanged && nextMap) {
+        lastSeenMapName = nextMap
+        await syncGSITeams()
+
+        const match = await getCurrentMatchOrNull()
+        if (match) {
+          const mapName = stripMapName(nextMap)
+          const ctScore = data.map?.team_ct?.score ?? 0
+          const tScore = data.map?.team_t?.score ?? 0
+          const desired = desiredReverseSideFromVeto(
+            match,
+            mapName,
+            ctScore,
+            tScore,
+            GSI.regulationMR
+          )
+          if (desired !== null) {
+            const applied = await applyReverseSide(io, match, mapName, desired)
+            if (applied) {
+              console.log(
+                `[GSI] Veto starting side — reverseSide=${desired} for map: ${mapName}`
+              )
+            }
+          }
+        }
+      }
+
+      const settings = await getSettings()
+      if (!settings.autoSwitchSidesByPlayers) return
+
+      const now = Date.now()
+      if (now - lastRosterCheckAt < ROSTER_CHECK_MS) return
+      lastRosterCheckAt = now
+
+      const mapPhase = data.map?.phase
+      const roundPhase =
+        data.round?.phase ?? lastGSIState?.phase_countdowns?.phase
+      const playing =
+        mapPhase === 'live' && (roundPhase === 'live' || roundPhase === 'freezetime')
+      if (!playing) return
+
+      const match = await getCurrentMatchOrNull()
+      if (!match || !nextMap) return
+
+      const dbPlayers = await playerRepo.getPlayers()
+      const desired = desiredReverseSideFromPlayers(
+        match,
+        lastGSIState?.allplayers as Record<string, { team?: string }> | undefined,
+        dbPlayers
+      )
+      if (desired === null) return
+
+      const mapName = stripMapName(nextMap)
+      const applied = await applyReverseSide(io, match, mapName, desired)
+      if (applied) {
+        console.log(`[GSI] Roster switch — reverseSide=${desired} for map: ${mapName}`)
+      }
+    } catch (err) {
+      console.error('[GSI] data handler error:', err)
     }
   })
 
@@ -109,6 +195,10 @@ export const setupGSI = (io: Server) => {
   GSI.on('intermissionEnd', async () => {
     try {
       const settings = await getSettings()
+      if (settings.autoSwitchSidesByPlayers) {
+        console.log('[GSI] autoSwitchSidesByPlayers enabled — skipping halftime flip')
+        return
+      }
       if (!settings.autoSwitchSides) {
         console.log('[GSI] autoSwitchSides disabled — skipping halftime flip')
         return

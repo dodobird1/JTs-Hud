@@ -5,12 +5,14 @@ const router = Router();
 
 export interface AppSettings {
   autoSwitchSides: boolean;
+  autoSwitchSidesByPlayers: boolean;
   telnetHost: string;
   telnetPort: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
   autoSwitchSides: true,
+  autoSwitchSidesByPlayers: false,
   telnetHost: '127.0.0.1',
   telnetPort: 2020,
 };
@@ -21,6 +23,10 @@ export const getSettings = async (): Promise<AppSettings> => {
   const map = Object.fromEntries(rows.map(r => [r.key, r.value]));
   return {
     autoSwitchSides: map.autoSwitchSides !== undefined ? map.autoSwitchSides === 'true' : DEFAULT_SETTINGS.autoSwitchSides,
+    autoSwitchSidesByPlayers:
+      map.autoSwitchSidesByPlayers !== undefined
+        ? map.autoSwitchSidesByPlayers === 'true'
+        : DEFAULT_SETTINGS.autoSwitchSidesByPlayers,
     telnetHost: map.telnetHost ?? DEFAULT_SETTINGS.telnetHost,
     telnetPort: map.telnetPort !== undefined ? Number(map.telnetPort) : DEFAULT_SETTINGS.telnetPort,
   };

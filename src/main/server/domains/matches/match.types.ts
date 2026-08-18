@@ -17,6 +17,8 @@ export interface Veto {
   teamId: string
   mapName: string
   side: 'CT' | 'T' | 'NO'
+  /** Team that starts the map as CT. Source of truth for pistol orientation. */
+  startingCtTeamId?: string | null
   type: 'ban' | 'pick' | 'decider'
   reverseSide?: boolean
   rounds?: (RoundData | null)[]
