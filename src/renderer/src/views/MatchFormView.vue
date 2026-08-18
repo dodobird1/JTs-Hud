@@ -24,7 +24,6 @@ const CS2_MAPS = [
   'de_mirage', 'de_nuke', 'de_overpass', 'de_train', 'de_vertigo', 'de_cache'
 ];
 const VETO_TYPES = ['ban', 'pick', 'decider'] as const;
-const SIDES = ['CT', 'T', 'NO'] as const;
 const SLOT_COUNT = 9;
 
 const makeEmptySlot = () => null as null | any;
@@ -61,6 +60,24 @@ const vetoTeamsOptions = computed((): SelectOption[] => [
   form.value.right?.id ? { value: form.value.right.id, label: getTeamName(form.value.right.id) } : { value: '', label: '—' },
   { value: '', label: '—' }
 ].filter((o, i, arr) => arr.findIndex(a => a.value === o.value) === i));
+
+const startingCtOptions = computed((): SelectOption[] => [
+  { value: '', label: 'Not set' },
+  ...(form.value.left?.id ? [{ value: form.value.left.id, label: getTeamName(form.value.left.id) }] : []),
+  ...(form.value.right?.id ? [{ value: form.value.right.id, label: getTeamName(form.value.right.id) }] : [])
+]);
+
+const startingSidePairLabel = computed(() => {
+  const ctId = vetoForm.value.startingCtTeamId;
+  if (!ctId || !form.value.left.id || !form.value.right.id) return '';
+  const tId = ctId === form.value.left.id ? form.value.right.id : form.value.left.id;
+  return `${getTeamName(ctId)} CT — ${getTeamName(tId)} T`;
+});
+
+const pickerSideFromStartingCt = (startingCtTeamId: string, teamId: string): 'CT' | 'T' | 'NO' => {
+  if (!startingCtTeamId || !teamId) return 'NO';
+  return startingCtTeamId === teamId ? 'CT' : 'T';
+};
 
 const vetoWinnerOptions = computed((): SelectOption[] => [
   { value: '', label: 'None' },
@@ -106,6 +123,7 @@ const getDefaultVetoForm = () => ({
   teamId: '' as string,
   mapName: 'de_mirage',
   side: 'NO' as string,
+  startingCtTeamId: '' as string,
   type: 'pick' as string,
   reverseSide: false,
   mapEnd: false,
@@ -127,7 +145,12 @@ const openVetoModal = (index: number) => {
   editingSlot.value = index;
   const existing = form.value.vetos[index];
   vetoForm.value = existing
-    ? { ...getDefaultVetoForm(), ...existing, score: { ...(existing.score ?? {}) } }
+    ? {
+        ...getDefaultVetoForm(),
+        ...existing,
+        score: { ...(existing.score ?? {}) },
+        startingCtTeamId: existing.startingCtTeamId ?? ''
+      }
     : { ...getDefaultVetoForm(), teamId: form.value.left.id ?? '' };
   showResultOverride.value = false;
   isVetoModalOpen.value = true;
@@ -139,7 +162,13 @@ const clearSlot = (index: number) => {
 
 const saveVetoModal = () => {
   if (editingSlot.value === null) return;
-  form.value.vetos[editingSlot.value] = { ...vetoForm.value };
+  const isPlayable = vetoForm.value.type === 'pick' || vetoForm.value.type === 'decider';
+  const startingCtTeamId = isPlayable ? (vetoForm.value.startingCtTeamId || null) : null;
+  form.value.vetos[editingSlot.value] = {
+    ...vetoForm.value,
+    startingCtTeamId,
+    side: pickerSideFromStartingCt(startingCtTeamId ?? '', vetoForm.value.teamId)
+  };
   isVetoModalOpen.value = false;
   editingSlot.value = null;
 };
@@ -337,13 +366,15 @@ const vetoTypeColor: Record<string, string> = {
                 <!-- Map name -->
                 <span class="text-sm font-semibold text-text-main flex-1 truncate">{{ veto.mapName }}</span>
 
-                <!-- Team + side -->
+                <!-- Team + who starts CT -->
                 <div class="flex items-center gap-2 shrink-0">
                   <span v-if="veto.type === 'decider'" class="text-xs text-zinc-400">Decider</span>
                   <span v-else class="text-xs text-zinc-400">{{ getTeamName(veto.teamId) }}</span>
-                  <span v-if="veto.side !== 'NO'" class="text-xs font-bold uppercase px-1.5 py-0.5 rounded border"
-                    :class="veto.side === 'CT' ? 'text-blue-400 border-blue-800/50 bg-blue-900/20' : 'text-amber-400 border-amber-800/50 bg-amber-900/20'">
-                    {{ veto.side }}
+                  <span
+                    v-if="veto.startingCtTeamId && veto.type !== 'ban'"
+                    class="text-xs font-bold uppercase px-1.5 py-0.5 rounded border text-blue-400 border-blue-800/50 bg-blue-900/20"
+                  >
+                    {{ getTeamName(veto.startingCtTeamId) }} CT
                   </span>
                   <span v-if="veto.mapEnd" class="text-xs font-bold uppercase text-emerald-400 bg-emerald-900/20 border border-emerald-800/50 px-1.5 py-0.5 rounded">Ended</span>
                 </div>
@@ -413,19 +444,26 @@ const vetoTypeColor: Record<string, string> = {
           />
         </div>
 
-        <!-- Side -->
-        <div>
-          <label class="block text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1.5">Starting Side</label>
+        <!-- Who starts CT (picks and deciders only) -->
+        <div v-if="vetoForm.type === 'pick' || vetoForm.type === 'decider'">
+          <label class="block text-xs font-bold uppercase tracking-wider text-zinc-400 mb-1.5">Who starts CT</label>
           <div class="flex gap-2">
             <button
-              v-for="s in SIDES" :key="s" type="button"
-              @click="vetoForm.side = s"
-              :class="vetoForm.side === s
-                ? s === 'CT' ? 'bg-blue-600 text-text-main' : s === 'T' ? 'bg-amber-500 text-text-main' : 'bg-zinc-600 text-text-main'
+              v-for="opt in startingCtOptions"
+              :key="opt.value || 'none'"
+              type="button"
+              @click="vetoForm.startingCtTeamId = String(opt.value)"
+              :class="vetoForm.startingCtTeamId === opt.value
+                ? opt.value === form.left.id
+                  ? 'bg-blue-600 text-text-main'
+                  : opt.value === form.right.id
+                    ? 'bg-amber-500 text-text-main'
+                    : 'bg-zinc-600 text-text-main'
                 : 'bg-surface text-zinc-400 hover:bg-surface-hover'"
-              class="flex-1 py-2 rounded-lg border border-border text-xs font-bold uppercase transition-colors hover:cursor-pointer"
-            >{{ s }}</button>
+              class="flex-1 py-2 rounded-lg border border-border text-xs font-bold transition-colors hover:cursor-pointer"
+            >{{ opt.label }}</button>
           </div>
+          <p v-if="startingSidePairLabel" class="text-xs text-zinc-500 mt-2">{{ startingSidePairLabel }}</p>
         </div>
 
         <!-- Result override toggle -->

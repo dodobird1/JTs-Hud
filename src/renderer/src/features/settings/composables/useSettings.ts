@@ -3,10 +3,11 @@ import { API_URL } from '../../../index'
 
 export interface AppSettings {
   autoSwitchSides: boolean
+  autoSwitchSidesByPlayers: boolean
 }
 
 export function useSettings() {
-  const settings = ref<AppSettings>({ autoSwitchSides: true })
+  const settings = ref<AppSettings>({ autoSwitchSides: true, autoSwitchSidesByPlayers: false })
   const isLoading = ref(false)
   const isSaving = ref(false)
 

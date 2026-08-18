@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, nextTick } from 'vue';
 import { useSettings } from '../../features/settings/composables/useSettings';
 import BaseButton from './BaseButton.vue';
 import BaseCheckbox from './BaseCheckbox.vue';
@@ -7,11 +7,28 @@ import BaseCheckbox from './BaseCheckbox.vue';
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
-const { settings, isLoading, isSaving, fetchSettings } = useSettings();
+const { settings, isLoading, isSaving, fetchSettings, saveSettings } = useSettings();
 
-watch(() => props.open, (val) => {
-  if (val) fetchSettings();
+let skipSave = false;
+
+watch(() => props.open, async (val) => {
+  if (!val) return;
+  skipSave = true;
+  await fetchSettings();
+  await nextTick();
+  skipSave = false;
 });
+
+watch(
+  () => [settings.value.autoSwitchSides, settings.value.autoSwitchSidesByPlayers] as const,
+  async () => {
+    if (skipSave || isLoading.value) return;
+    await saveSettings({
+      autoSwitchSides: settings.value.autoSwitchSides,
+      autoSwitchSidesByPlayers: settings.value.autoSwitchSidesByPlayers
+    });
+  }
+);
 
 // --- GSI Config Installation ---
 const steamPath = ref('C:\\Program Files (x86)\\Steam');
@@ -68,12 +85,21 @@ const installGsiCfg = async () => {
               <p class="text-xs font-semibold capitalize text-zinc-500 mb-3">Match Automation</p>
 
               <!-- Auto Switch Sides -->
-              <div class="flex items-center justify-between">
+              <div class="flex items-center justify-between gap-3">
                 <div>
                   <p class="text-sm font-medium text-zinc-200">Auto Switch Sides</p>
                   <p class="text-xs text-zinc-500 mt-0.5">Automatically flip team sides at halftime</p>
                 </div>
                 <BaseCheckbox v-model="settings.autoSwitchSides" :disabled="isSaving" size="md" class="text-primary" />
+              </div>
+
+              <!-- Switch by player roster -->
+              <div class="flex items-center justify-between gap-3 mt-4">
+                <div>
+                  <p class="text-sm font-medium text-zinc-200">Switch by player roster</p>
+                  <p class="text-xs text-zinc-500 mt-0.5">Detect sides from assigned players’ SteamIDs. Ignores GSI team names. When on, replaces the half-time flip.</p>
+                </div>
+                <BaseCheckbox v-model="settings.autoSwitchSidesByPlayers" :disabled="isSaving" size="md" class="text-primary" />
               </div>
             </div>
 
